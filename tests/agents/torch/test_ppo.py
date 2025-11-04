@@ -1,5 +1,5 @@
-import hypothesis
-import hypothesis.strategies as st
+import hypothesis  # type: ignore
+import hypothesis.strategies as st  # type: ignore
 import pytest
 
 import gymnasium

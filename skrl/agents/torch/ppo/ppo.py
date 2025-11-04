@@ -530,14 +530,14 @@ class PPO(Agent):
                     self.scheduler.step()
 
         # record data
-        self.track_data("Loss / Policy loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
-        self.track_data("Loss / Value loss", cumulative_value_loss / (self._learning_epochs * self._mini_batches))
+        self.track_data("Loss/surrogate_loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
+        self.track_data("Loss/value_loss", cumulative_value_loss / (self._learning_epochs * self._mini_batches))
         if self._entropy_loss_scale:
             self.track_data(
-                "Loss / Entropy loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches)
+                "Loss/entropy_loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches)
             )
 
-        self.track_data("Policy / Standard deviation", self.policy.distribution(role="policy").stddev.mean().item())
+        self.track_data("Policy/mean_noise_std", self.policy.distribution(role="policy").stddev.mean().item())
 
         if self._learning_rate_scheduler:
-            self.track_data("Learning / Learning rate", self.scheduler.get_last_lr()[0])
+            self.track_data("Loss/learning_rate", self.scheduler.get_last_lr()[0])

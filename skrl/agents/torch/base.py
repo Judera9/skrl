@@ -197,13 +197,19 @@ class Agent:
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
+        # compute iteration number
+        try:
+            iteration = timestep // self.cfg["rollouts"]
+        except Exception:
+            iteration = timestep
+
         for k, v in self.tracking_data.items():
             if k.endswith("(min)"):
-                self.writer.add_scalar(k, np.min(v), timestep)
+                self.writer.add_scalar(k, np.min(v), iteration)
             elif k.endswith("(max)"):
-                self.writer.add_scalar(k, np.max(v), timestep)
+                self.writer.add_scalar(k, np.max(v), iteration)
             else:
-                self.writer.add_scalar(k, np.mean(v), timestep)
+                self.writer.add_scalar(k, np.mean(v), iteration)
         # reset data containers for next iteration
         self._track_rewards.clear()
         self._track_timesteps.clear()
@@ -327,21 +333,21 @@ class Agent:
                 self._cumulative_timesteps[finished_episodes] = 0
 
             # record data
-            self.tracking_data["Reward / Instantaneous reward (max)"].append(torch.max(rewards).item())
-            self.tracking_data["Reward / Instantaneous reward (min)"].append(torch.min(rewards).item())
-            self.tracking_data["Reward / Instantaneous reward (mean)"].append(torch.mean(rewards).item())
+            # self.tracking_data["Train/max_instantaneous_reward"] = torch.max(rewards).item()
+            # self.tracking_data["Train/min_instantaneous_reward"] = torch.min(rewards).item()
+            # self.tracking_data["Train/mean_instantaneous_reward"] = torch.mean(rewards).item()
 
             if len(self._track_rewards):
                 track_rewards = np.array(self._track_rewards)
                 track_timesteps = np.array(self._track_timesteps)
 
-                self.tracking_data["Reward / Total reward (max)"].append(np.max(track_rewards))
-                self.tracking_data["Reward / Total reward (min)"].append(np.min(track_rewards))
-                self.tracking_data["Reward / Total reward (mean)"].append(np.mean(track_rewards))
+                # self.tracking_data["Train/max_reward"].append(np.max(track_rewards))
+                # self.tracking_data["Train/min_reward"].append(np.min(track_rewards))
+                self.tracking_data["Train/mean_reward"].append(np.mean(track_rewards))
 
-                self.tracking_data["Episode / Total timesteps (max)"].append(np.max(track_timesteps))
-                self.tracking_data["Episode / Total timesteps (min)"].append(np.min(track_timesteps))
-                self.tracking_data["Episode / Total timesteps (mean)"].append(np.mean(track_timesteps))
+                # self.tracking_data["Train/max_episode_length"].append(np.max(track_timesteps))
+                # self.tracking_data["Train/min_episode_length"].append(np.min(track_timesteps))
+                self.tracking_data["Train/mean_episode_length"].append(np.mean(track_timesteps))
 
     def set_mode(self, mode: str) -> None:
         """Set the model mode (training or evaluation)
