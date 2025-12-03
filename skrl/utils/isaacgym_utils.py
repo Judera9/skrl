@@ -16,7 +16,7 @@ except ImportError:
 try:
     import imageio
     import isaacgym
-    import isaacgym.torch_utils as torch_utils
+    import isaacgym_utils as torch_utils
     from isaacgym import gymapi
 except ImportError:
     imageio = None

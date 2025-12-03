@@ -201,7 +201,7 @@ def get_env_instance(
 
     Example::
 
-        from skrl.envs.wrappers.torch import wrap_env
+        from skrl.envs.wrappers import wrap_env
         from skrl.utils.omniverse_isaacgym_utils import get_env_instance
 
         # get environment instance

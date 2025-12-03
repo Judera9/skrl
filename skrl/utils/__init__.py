@@ -28,7 +28,6 @@ def set_seed(seed: Optional[int] = None, deterministic: bool = False) -> int:
     - random
     - numpy
     - torch (if available)
-    - jax (skrl's PRNG key: ``config.jax.key``)
 
     Example::
 
@@ -76,8 +75,6 @@ def set_seed(seed: Optional[int] = None, deterministic: bool = False) -> int:
     # set different seeds in distributed runs
     if config.torch.is_distributed:
         seed += config.torch.rank
-    if config.jax.is_distributed:
-        seed += config.jax.rank
 
     logger.info(f"Seed: {seed}")
 
@@ -105,8 +102,5 @@ def set_seed(seed: Optional[int] = None, deterministic: bool = False) -> int:
         pass
     except Exception as e:
         logger.warning(f"PyTorch seeding error: {e}")
-
-    # jax
-    config.jax.key = seed
 
     return seed

@@ -1,4 +1,4 @@
-import isaacgym.torch_utils as torch_utils
+import isaacgym_utils as torch_utils
 
 import torch
 
