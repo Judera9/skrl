@@ -14,7 +14,7 @@ from skrl.agents import Agent
 from skrl.memories import Memory
 from skrl.models import Model
 from skrl.resources.schedulers import KLAdaptiveLR
-
+from skrl.resources.schedulers import ConstantScheduler
 
 # fmt: off
 # [start-config-dict-torch]
@@ -29,6 +29,8 @@ POMDP_PPO_DEFAULT_CONFIG = {
     "learning_rate": 1e-3,                  # learning rate
     "learning_rate_scheduler": None,        # learning rate scheduler class (see torch.optim.lr_scheduler)
     "learning_rate_scheduler_kwargs": {},   # learning rate scheduler's kwargs (e.g. {"step_size": 1e-3})
+    "entropy_scheduler": None,        # entropy scheduler class (see skrl.resources.schedulers)
+    "entropy_scheduler_kwargs": {},   # entropy scheduler's kwargs (e.g. {"step_size": 1e-3})
 
     "state_preprocessor": None,             # state preprocessor class (see skrl.resources.preprocessors)
     "state_preprocessor_kwargs": {},        # state preprocessor's kwargs (e.g. {"size": env.observation_space})
@@ -154,6 +156,7 @@ class POMDP_PPO(Agent):
 
         self._learning_rate = self.cfg["learning_rate"]
         self._learning_rate_scheduler = self.cfg["learning_rate_scheduler"]
+        self._entropy_scheduler = self.cfg["entropy_scheduler"]
 
         self._state_preprocessor = self.cfg["state_preprocessor"]
         self._actor_observation_preprocessor = self.cfg["actor_observation_preprocessor"]
@@ -186,8 +189,12 @@ class POMDP_PPO(Agent):
                     itertools.chain(self.policy.parameters(), self.value.parameters()), lr=self._learning_rate
                 )
             if self._learning_rate_scheduler is not None:
-                self.scheduler = self._learning_rate_scheduler(
+                self.learning_rate_scheduler = self._learning_rate_scheduler(
                     self.optimizer, **self.cfg["learning_rate_scheduler_kwargs"]
+                )
+            if self._entropy_scheduler is not None:
+                self.entropy_scheduler = self._entropy_scheduler(
+                    self._entropy_loss_scale, **self.cfg["entropy_scheduler_kwargs"]
                 )
 
             self.checkpoint_modules["optimizer"] = self.optimizer
@@ -583,15 +590,20 @@ class POMDP_PPO(Agent):
 
             # update learning rate
             if self._learning_rate_scheduler:
-                if isinstance(self.scheduler, KLAdaptiveLR):
+                if isinstance(self.learning_rate_scheduler, KLAdaptiveLR):
                     kl = torch.tensor(kl_divergences, device=self.device).mean()
                     # reduce (collect from all workers/processes) KL in distributed runs
                     if config.torch.is_distributed:
                         torch.distributed.all_reduce(kl, op=torch.distributed.ReduceOp.SUM)
                         kl /= config.torch.world_size
-                    self.scheduler.step(kl.item())
+                    self.learning_rate_scheduler.step(kl.item())
                 else:
-                    self.scheduler.step()
+                    self.learning_rate_scheduler.step()
+
+        # update entropy scheduler
+        if self._entropy_scheduler:
+            self.entropy_scheduler.step()
+            self._entropy_loss_scale = self.entropy_scheduler.get_value()
 
         # record data
         self.track_data("Loss/surrogate_loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
@@ -602,6 +614,8 @@ class POMDP_PPO(Agent):
             self.track_data("Loss/grad_penalty", cumulative_grad_penalty / (self._learning_epochs * self._mini_batches))
         if self._entropy_loss_scale:
             self.track_data("Loss/entropy_loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches))
+            if self._entropy_scheduler:
+                self.track_data("Loss/entropy_loss_scale", self._entropy_loss_scale)
         self.track_data("Policy/mean_noise_std", self.policy.action_std.mean().item())
         if self._learning_rate_scheduler:
-            self.track_data("Loss/learning_rate", self.scheduler.get_last_lr()[0])
+            self.track_data("Loss/learning_rate", self.learning_rate_scheduler.get_last_lr()[0])

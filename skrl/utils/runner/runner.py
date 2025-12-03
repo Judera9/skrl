@@ -8,7 +8,7 @@ from skrl.envs.wrappers import MultiAgentEnvWrapper, Wrapper
 from skrl.models import Model
 from skrl.resources.noises import GaussianNoise, OrnsteinUhlenbeckNoise  # noqa
 from skrl.resources.preprocessors import RunningStandardScaler  # noqa
-from skrl.resources.schedulers import KLAdaptiveLR  # noqa
+from skrl.resources.schedulers import KLAdaptiveLR, ConstantScheduler   # noqa
 from skrl.trainers import Trainer
 from skrl.utils import set_seed
 
@@ -170,6 +170,7 @@ class Runner:
         """
         _direct_eval = [
             "learning_rate_scheduler",
+            "entropy_scheduler",
             "shared_state_preprocessor",
             "state_preprocessor",
             "actor_observation_preprocessor",
