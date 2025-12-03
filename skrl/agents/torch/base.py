@@ -168,12 +168,12 @@ class Agent:
 
         # main entry to log data for consumption and visualization by TensorBoard
         if self.write_interval == "auto":
-            self.write_interval = int(trainer_cfg.get("timesteps", 0) / 100)
+            self.write_interval = int(trainer_cfg.get("rollouts", 24))
         if self.write_interval > 0:
             self.writer = SummaryWriter(log_dir=self.experiment_dir)
 
         if self.checkpoint_interval == "auto":
-            self.checkpoint_interval = int(trainer_cfg.get("timesteps", 0) / 10)
+            self.checkpoint_interval = int(trainer_cfg.get("rollouts", 24) * 100)
         if self.checkpoint_interval > 0:
             os.makedirs(os.path.join(self.experiment_dir, "checkpoints"), exist_ok=True)
 
@@ -259,6 +259,23 @@ class Agent:
             self.checkpoint_best_modules["saved"] = True
 
     def act(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
+        """Process the environment's states to make a decision (actions) using the main policy
+
+        :param states: Environment's states
+        :type states: torch.Tensor
+        :param timestep: Current timestep
+        :type timestep: int
+        :param timesteps: Number of timesteps
+        :type timesteps: int
+
+        :raises NotImplementedError: The method is not implemented by the inheriting classes
+
+        :return: Actions
+        :rtype: torch.Tensor
+        """
+        raise NotImplementedError
+
+    def act_eval(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
         """Process the environment's states to make a decision (actions) using the main policy
 
         :param states: Environment's states

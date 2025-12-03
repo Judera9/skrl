@@ -9,6 +9,12 @@ from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, u
 
 
 class IsaacLabWrapper(Wrapper):
+    """Isaac Lab environment wrapper
+
+    Wrapper for Isaac Lab environments, default input env should be in OrderEnforcing wrapper, which intends to 
+    enforce the order of the environment's methods to be called in a specific order.
+    """
+
     def __init__(self, env: Any) -> None:
         """Isaac Lab environment wrapper
 
@@ -49,33 +55,33 @@ class IsaacLabWrapper(Wrapper):
         except:
             return self._unwrapped.action_space
 
-    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Perform a step in the environment
 
         :param actions: The actions to perform
         :type actions: torch.Tensor
 
-        :return: Observation, reward, terminated, truncated, info
+        :return: State, Observation, reward, terminated, truncated, info
         :rtype: tuple of torch.Tensor and any other info
         """
         actions = unflatten_tensorized_space(self.action_space, actions)
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
-        self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
-        return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
+        self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
+        self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+        return self._observations, self._actor_observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
-    def reset(self) -> Tuple[torch.Tensor, Any]:
+    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, Any]:
         """Reset the environment
 
-        :return: Observation, info
+        :return: State, Observation, info
         :rtype: torch.Tensor and any other info
         """
         if self._reset_once:
             observations, self._info = self._env.reset()
-            self._observations = flatten_tensorized_space(
-                tensorize_space(self.observation_space, observations["policy"])
-            )
+            self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
+            self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
             self._reset_once = False
-        return self._observations, self._info
+        return self._observations, self._actor_observations, self._info
 
     def render(self, *args, **kwargs) -> None:
         """Render the environment"""

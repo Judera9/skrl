@@ -85,6 +85,10 @@ class Runner:
             from skrl.utils.model_instantiators.torch import multivariate_gaussian_model as component
         elif name == "shared":
             from skrl.utils.model_instantiators.torch import shared_model as component
+        elif name == "simplegaussian":
+            from skrl.models.torch import SimpleGaussian as component
+        elif name == "simpledeterministic":
+            from skrl.models.torch import SimpleDeterministic as component
         # memory
         elif name == "randommemory":
             from skrl.memories.torch import RandomMemory as component
@@ -117,6 +121,11 @@ class Runner:
             from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 
             component = PPO_DEFAULT_CONFIG if "default_config" in name else PPO
+        elif name in ["pomdp_ppo", "pomdp_ppo_default_config"]:
+            from skrl.agents.torch.ppo import POMDP_PPO, POMDP_PPO_DEFAULT_CONFIG
+
+            component = POMDP_PPO_DEFAULT_CONFIG if "default_config" in name else POMDP_PPO
+
         elif name in ["rpo", "rpo_default_config"]:
             from skrl.agents.torch.rpo import RPO, RPO_DEFAULT_CONFIG
 
@@ -145,6 +154,8 @@ class Runner:
         # trainer
         elif name == "sequentialtrainer":
             from skrl.trainers.torch import SequentialTrainer as component
+        elif name == "isaaclabtrainer":
+            from skrl.trainers.torch import IsaaclabTrainer as component
 
         if component is None:
             raise ValueError(f"Unknown component '{name}' in runner cfg")
@@ -161,6 +172,7 @@ class Runner:
             "learning_rate_scheduler",
             "shared_state_preprocessor",
             "state_preprocessor",
+            "actor_observation_preprocessor",
             "value_preprocessor",
             "amp_state_preprocessor",
             "noise",
@@ -235,6 +247,8 @@ class Runner:
                     # get specific spaces according to agent/model cfg
                     observation_space = observation_spaces[agent_id]
                     if agent_class == "mappo" and role == "value":
+                        observation_space = state_spaces[agent_id]
+                    if 'pomdp' in agent_class and role == "value":
                         observation_space = state_spaces[agent_id]
                     if agent_class == "amp" and role == "discriminator":
                         try:
@@ -407,13 +421,10 @@ class Runner:
                 "reply_buffer": reply_buffer,
                 "collect_reference_motions": lambda num_samples: env.collect_reference_motions(num_samples),
             }
-        elif agent_class in ["a2c", "cem", "ddpg", "ddqn", "dqn", "ppo", "rpo", "sac", "td3", "trpo"]:
+        elif agent_class in ["a2c", "cem", "ddpg", "ddqn", "dqn", "ppo", "pomdp_ppo", "rpo", "sac", "td3", "trpo"]:
             agent_id = possible_agents[0]
             agent_cfg = self._component(f"{agent_class}_DEFAULT_CONFIG").copy()
             agent_cfg.update(self._process_cfg(cfg["agent"]))
-            agent_cfg.get("state_preprocessor_kwargs", {}).update(
-                {"size": observation_spaces[agent_id], "device": device}
-            )
             agent_cfg.get("value_preprocessor_kwargs", {}).update({"size": 1, "device": device})
             if agent_cfg.get("exploration", {}).get("noise", None):
                 agent_cfg["exploration"].get("noise_kwargs", {}).update({"device": device})
@@ -425,12 +436,30 @@ class Runner:
                 agent_cfg["smooth_regularization_noise"] = agent_cfg["smooth_regularization_noise"](
                     **agent_cfg.get("smooth_regularization_noise_kwargs", {})
                 )
-            agent_kwargs = {
-                "models": models[agent_id],
-                "memory": memories[agent_id],
-                "observation_space": observation_spaces[agent_id],
-                "action_space": action_spaces[agent_id],
-            }
+            if state_spaces[agent_id] != observation_spaces[agent_id]:  # POMDP_.*
+                agent_cfg.get("state_preprocessor_kwargs", {}).update(
+                    {"size": state_spaces[agent_id], "device": device}
+                )
+                agent_cfg.get("actor_observation_preprocessor_kwargs", {}).update(
+                    {"size": observation_spaces[agent_id], "device": device}
+                )
+                agent_kwargs = {
+                    "models": models[agent_id],
+                    "memory": memories[agent_id],
+                    "observation_space": state_spaces[agent_id],
+                    "actor_observation_space": observation_spaces[agent_id],
+                    "action_space": action_spaces[agent_id],
+                }
+            else:
+                agent_cfg.get("state_preprocessor_kwargs", {}).update(
+                    {"size": observation_spaces[agent_id], "device": device}
+                )
+                agent_kwargs = {
+                    "models": models[agent_id],
+                    "memory": memories[agent_id],
+                    "observation_space": observation_spaces[agent_id],
+                    "action_space": action_spaces[agent_id],
+                }
         # multi-agent configuration and instantiation
         elif agent_class in ["ippo"]:
             agent_cfg = self._component(f"{agent_class}_DEFAULT_CONFIG").copy()
