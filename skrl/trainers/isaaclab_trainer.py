@@ -128,10 +128,16 @@ class IsaaclabTrainer(Trainer):
             if self.env.num_envs > 1:
                 states = next_states
                 actor_observations = next_actor_observations
+                # Reset noise generators for terminated environments
+                dones = terminated | truncated
+                if dones.any():
+                    self.agents.policy.reset(dones=dones)
             else:
                 if terminated.any() or truncated.any():
                     with torch.no_grad():
                         states, actor_observations, infos = self.env.reset()
+                    # Reset noise generator for single environment
+                    self.agents.policy.reset()
                 else:
                     states = next_states
                     actor_observations = next_actor_observations

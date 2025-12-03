@@ -6,7 +6,7 @@ from skrl import logger
 from skrl.agents import Agent
 from skrl.envs.wrappers import MultiAgentEnvWrapper, Wrapper
 from skrl.models import Model
-from skrl.resources.noises import GaussianNoise, OrnsteinUhlenbeckNoise  # noqa
+from skrl.resources.noises import GaussianNoise, OrnsteinUhlenbeckNoise, PinkNoiseDist  # noqa
 from skrl.resources.preprocessors import RunningStandardScaler  # noqa
 from skrl.resources.schedulers import KLAdaptiveLR, ConstantScheduler   # noqa
 from skrl.trainers import Trainer
@@ -177,6 +177,7 @@ class Runner:
             "value_preprocessor",
             "amp_state_preprocessor",
             "noise",
+            "noise_generator",
             "smooth_regularization_noise",
         ]
 

@@ -41,6 +41,15 @@ class SimpleGaussian(Model):
         self.min_log_std = kwargs.get("min_log_std", -20.0)
         self.max_action = kwargs.get("max_action", 100.0)
         self.min_action = kwargs.get("min_action", -100.0)
+        
+        # Noise configuration
+        self._noise_generator = kwargs.get("noise_generator", None)
+        self._noise_generator_kwargs = kwargs.get("noise_generator_kwargs", {})
+        if self._noise_generator:
+            self._noise_generator_kwargs.update({
+                "action_dim": self.num_actions,
+                "device": self.device})
+            self.noise_generator = self._noise_generator(**self._noise_generator_kwargs)
 
         # get the observation dimensions
         num_actor_obs = self.num_observations
@@ -85,7 +94,9 @@ class SimpleGaussian(Model):
         Normal.set_default_validate_args(False)
 
     def reset(self, dones=None):
-        pass
+        # Reset noise generator if it exists
+        if self._noise_generator:
+            self.noise_generator.reset(dones)
 
     def compute(self, inputs, role=""):
         """Compute the network output (mean action and log_std)"""
@@ -130,7 +141,15 @@ class SimpleGaussian(Model):
         self.distribution = Normal(mean, std)
         
         # Sample actions
-        actions = self.distribution.sample()
+        # actions = self.distribution.sample()
+        # Only use noise generator during rollout (when taken_actions is not provided)
+        if self._noise_generator and "taken_actions" not in inputs:
+            if self.noise_generator.first_run:
+                self.noise_generator.init(num_envs=mean.shape[0])
+            noise = self.noise_generator.sample()
+            actions = mean + std * noise
+        else:
+            actions = mean + std * torch.randn_like(std)  # fallback or during update
 
         # Apply action scaling if enabled
         if self.output_action_scale:
