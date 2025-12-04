@@ -619,3 +619,5 @@ class POMDP_PPO(Agent):
         self.track_data("Policy/mean_noise_std", self.policy.action_std.mean().item())
         if self._learning_rate_scheduler:
             self.track_data("Loss/learning_rate", self.learning_rate_scheduler.get_last_lr()[0])
+        if self.policy._noise_generator:
+            self.track_data("Loss/noise_smoothing", self.policy.noise_generator.smoothing)

@@ -173,7 +173,7 @@ class Agent:
             self.writer = SummaryWriter(log_dir=self.experiment_dir)
 
         if self.checkpoint_interval == "auto":
-            self.checkpoint_interval = int(trainer_cfg.get("rollouts", 24) * 100)
+            self.checkpoint_interval = int(trainer_cfg.get("rollouts", 24) * 1000)
         if self.checkpoint_interval > 0:
             os.makedirs(os.path.join(self.experiment_dir, "checkpoints"), exist_ok=True)
 
@@ -226,7 +226,11 @@ class Agent:
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-        tag = str(timestep if timestep is not None else datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S-%f"))
+        # tag = str(timestep if timestep is not None else datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S-%f"))
+        if timestep is not None:
+            tag = str(timestep // self.cfg["rollouts"])
+        else:
+            tag = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S-%f")
         # separated modules
         if self.checkpoint_store_separately:
             for name, module in self.checkpoint_modules.items():
