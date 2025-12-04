@@ -15,7 +15,6 @@ from skrl.utils.spaces import unflatten_tensorized_space
 
 
 class SimpleGaussian(Model):
-    is_recurrent = False
 
     def __init__(
         self,
