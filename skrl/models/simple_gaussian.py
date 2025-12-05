@@ -148,6 +148,7 @@ class SimpleGaussian(Model):
             noise = self.noise_generator.sample()
             actions = mean + std * noise
         else:
+            # actions = self.distribution.sample()
             actions = mean + std * torch.randn_like(std)  # fallback or during update
 
         # Apply action scaling if enabled

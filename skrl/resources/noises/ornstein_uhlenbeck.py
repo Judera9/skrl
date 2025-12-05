@@ -19,6 +19,7 @@ class OrnsteinUhlenbeckNoise(Noise):
         mean: float = 0,
         std: float = 1,
         device: Optional[Union[str, torch.device]] = None,
+        **kwargs,
     ) -> None:
         """Class representing an Ornstein-Uhlenbeck noise
 
@@ -42,40 +43,65 @@ class OrnsteinUhlenbeckNoise(Noise):
         """
         super().__init__(device)
 
-        self.state = 0
+        self.first_run = True
         self.theta = theta
         self.sigma = sigma
         self.base_scale = base_scale
+        
+        # Store action_dim from kwargs (passed by SimpleGaussian)
+        self.action_dim = kwargs.get("action_dim", 1)
 
         self.distribution = Normal(
             loc=torch.tensor(mean, device=self.device, dtype=torch.float32),
             scale=torch.tensor(std, device=self.device, dtype=torch.float32),
         )
 
-    def sample(self, size: Union[Tuple[int], torch.Size]) -> torch.Tensor:
-        """Sample an Ornstein-Uhlenbeck noise
-
-        :param size: Shape of the sampled tensor
-        :type size: tuple or list of int, or torch.Size
-
-        :return: Sampled noise
-        :rtype: torch.Tensor
-
-        Example::
-
-            >>> noise.sample((3, 2))
-            tensor([[-0.0452,  0.0162],
-                    [ 0.0649, -0.0708],
-                    [-0.0211,  0.0066]], device='cuda:0')
-
-            >>> x = torch.rand(3, 2, device="cuda:0")
-            >>> noise.sample(x.shape)
-            tensor([[-0.0540,  0.0461],
-                    [ 0.1117, -0.1157],
-                    [-0.0074,  0.0420]], device='cuda:0')
+    def init(self, num_envs):
+        """Initialize noise state for batch environments
+        
+        Args:
+            num_envs: Number of parallel environments
         """
+        self.num_envs = num_envs
+        self.first_run = False
+        # Initialize state with correct action dimensions
+        self.state = torch.zeros(num_envs, self.action_dim).to(self.device)
+
+    def sample(self, sigma=1.0):
+        """Sample Ornstein-Uhlenbeck noise for current batch
+        
+        Args:
+            sigma: Scaling factor for noise (matches PinkNoiseDist interface)
+            
+        Returns:
+            Sampled noise tensor with shape (num_envs, action_dim)
+        """
+        if not hasattr(self, 'num_envs'):
+            raise RuntimeError("OrnsteinUhlenbeckNoise.init() must be called before sample()")
+        
+        # Generate noise for all environments and actions
+        size = (self.num_envs, self.action_dim)
+        
         if hasattr(self.state, "shape") and self.state.shape != torch.Size(size):
-            self.state = 0
+            self.state = torch.zeros(size).to(self.device)
+            
         self.state += -self.state * self.theta + self.sigma * self.distribution.sample(size)
 
-        return self.base_scale * self.state
+        return self.base_scale * self.state * sigma
+
+    def reset(self, dones=None):
+        """Reset noise state for specified environments
+        
+        Args:
+            dones: Boolean tensor indicating which environments to reset
+        """
+        if not hasattr(self, 'num_envs'):
+            return
+            
+        if dones is not None and dones.any():
+            # Reset only specified environments
+            dones_env_idx = dones.nonzero()[:, 0]
+            self.state[dones_env_idx] = torch.zeros(len(dones_env_idx), self.action_dim).to(self.device)
+        else:
+            # Reset all environments
+            self.state = torch.zeros(self.num_envs, self.action_dim).to(self.device)
