@@ -1,4 +1,4 @@
-from typing import Any, Mapping, Tuple, Union
+from typing import Any, Mapping, Tuple, Union, Dict
 
 import gymnasium
 
@@ -24,7 +24,7 @@ class IsaacLabWrapper(Wrapper):
         super().__init__(env)
 
         self._reset_once = True
-        self._observations = None
+        self._observations_dict = None
         self._info = {}
 
     @property
@@ -47,6 +47,13 @@ class IsaacLabWrapper(Wrapper):
         except:
             return self._unwrapped.observation_space["policy"]
 
+    def certain_observation_space(self, group_key: str) -> gymnasium.Space:
+        """Observation space for a certain group"""
+        try:
+            return self._unwrapped.single_observation_space[group_key]
+        except KeyError:
+            return self._unwrapped.observation_space[group_key]
+
     @property
     def action_space(self) -> gymnasium.Space:
         """Action space"""
@@ -55,7 +62,7 @@ class IsaacLabWrapper(Wrapper):
         except:
             return self._unwrapped.action_space
 
-    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def step(self, actions: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Perform a step in the environment
 
         :param actions: The actions to perform
@@ -66,11 +73,12 @@ class IsaacLabWrapper(Wrapper):
         """
         actions = unflatten_tensorized_space(self.action_space, actions)
         observations, reward, terminated, truncated, self._info = self._env.step(actions)
-        self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
-        self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
-        return self._observations, self._actor_observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
+        # self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
+        # self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+        self._observations_dict = observations
+        return self._observations_dict, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
-    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, Any]:
+    def reset(self) -> Tuple[Dict[str, torch.Tensor], Any]:
         """Reset the environment
 
         :return: State, Observation, info
@@ -78,10 +86,11 @@ class IsaacLabWrapper(Wrapper):
         """
         if self._reset_once:
             observations, self._info = self._env.reset()
-            self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
-            self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+            # self._observations = flatten_tensorized_space(tensorize_space(self.state_space, observations["critic"]))
+            # self._actor_observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+            self._observations_dict = observations
             self._reset_once = False
-        return self._observations, self._actor_observations, self._info
+        return self._observations_dict, self._info
 
     def render(self, *args, **kwargs) -> None:
         """Render the environment"""

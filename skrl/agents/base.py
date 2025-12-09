@@ -690,9 +690,11 @@ class Agent:
         timestep += 1
 
         # update best models and write checkpoints
-        if timestep > 1 and self.checkpoint_interval > 0 and not timestep % self.checkpoint_interval:
+        if timestep > 1 and self.checkpoint_interval > 0 \
+            and not timestep % self.checkpoint_interval \
+            or timestep == 1:
             # update best models
-            reward = np.mean(self.tracking_data.get("Reward / Total reward (mean)", -(2**31)))
+            reward = np.mean(self.tracking_data.get("Train/mean_reward", -(2**31)))
             if reward > self.checkpoint_best_modules["reward"]:
                 self.checkpoint_best_modules["timestep"] = timestep
                 self.checkpoint_best_modules["reward"] = reward

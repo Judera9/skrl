@@ -1,4 +1,4 @@
-from typing import Any, Mapping, Optional, Tuple, Union
+from typing import Any, Mapping, Optional, Tuple, Union, Dict
 
 import copy
 import itertools
@@ -32,6 +32,8 @@ POMDP_PPO_DEFAULT_CONFIG = {
     "entropy_scheduler": None,        # entropy scheduler class (see skrl.resources.schedulers)
     "entropy_scheduler_kwargs": {},   # entropy scheduler's kwargs (e.g. {"step_size": 1e-3})
 
+    "use_encoder": False,                # encoder class (see skrl.models)
+    "encoder_kwargs": {},           # encoder's kwargs (e.g. {"name": "encoder"})
     "state_preprocessor": None,             # state preprocessor class (see skrl.resources.preprocessors)
     "state_preprocessor_kwargs": {},        # state preprocessor's kwargs (e.g. {"size": env.observation_space})
     "actor_observation_preprocessor": None, # actor observation preprocessor class (see skrl.resources.preprocessors)
@@ -173,6 +175,15 @@ class POMDP_PPO(Agent):
 
         self._mixed_precision = self.cfg["mixed_precision"]
 
+        # configure encoders
+        self._use_encoder = self.cfg["use_encoder"]
+        self._encoder_kwargs = self.cfg["encoder_kwargs"]
+        if self._use_encoder:
+            self.encoder = self.models.get(self._encoder_kwargs["model_name"], None)
+            self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self._encoder_kwargs["learning_rate"])
+            self.checkpoint_modules["encoder"] = self.encoder
+            self.checkpoint_modules["encoder_optimizer"] = self.encoder_optimizer
+
         # set up automatic mixed precision
         self._device_type = torch.device(device).type
         if version.parse(torch.__version__) >= version.parse("2.4"):
@@ -218,6 +229,14 @@ class POMDP_PPO(Agent):
         else:
             self._value_preprocessor = self._empty_preprocessor
 
+        if self._use_encoder:
+            self._encoder_preprocessor = self._encoder_kwargs["encoder_preprocessor"]
+            if self._encoder_preprocessor:
+                self._encoder_preprocessor = self._encoder_preprocessor(**self._encoder_kwargs["encoder_preprocessor_kwargs"])
+                self.checkpoint_modules["encoder_preprocessor"] = self._encoder_preprocessor
+            else:
+                self._encoder_preprocessor = self._empty_preprocessor
+
     def init(self, trainer_cfg: Optional[Mapping[str, Any]] = None) -> None:
         """Initialize the agent"""
         super().init(trainer_cfg=trainer_cfg)
@@ -239,6 +258,11 @@ class POMDP_PPO(Agent):
             # tensors sampled during training
             self._tensors_names = ["states", "actor_observations", "actions", "log_prob", "values", "returns", "advantages"]
 
+            if self._use_encoder:
+                self.other_observation_space = self.encoder.action_space
+                self.memory.create_tensor(name=f"{self._encoder_kwargs['obs_name']}", size=self.other_observation_space, dtype=torch.float32)
+                self._tensors_names.append(f"{self._encoder_kwargs['obs_name']}")
+
         # create temporary variables needed for storage and computation
         self._current_log_prob = None
         self._current_next_states = None
@@ -257,14 +281,22 @@ class POMDP_PPO(Agent):
         :return: Actions
         :rtype: torch.Tensor
         """
+        if self._use_encoder:
+            self.encoder.set_mode("eval")
+            states = self._actor_observation_preprocessor(states)
+            raw_encoder_output, _, _ = self.encoder.compute({"states": states}, role="policy")
+            encoder_output = self._encoder_preprocessor(raw_encoder_output, train=False)
+            states = torch.cat([states, encoder_output], dim=-1)
+        else:
+            states = self._actor_observation_preprocessor(states)
+
         # sample random actions
-        # TODO, check for stochasticity
         if timestep < self._random_timesteps:
-            return self.policy.random_act({"states": self._actor_observation_preprocessor(states)}, role="policy")
+            return self.policy.random_act({"states": states}, role="policy")
 
         # sample stochastic actions
         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
-            actions, log_prob, outputs = self.policy.act({"states": self._actor_observation_preprocessor(states)}, role="policy")
+            actions, log_prob, outputs = self.policy.act({"states": states}, role="policy")
             self._current_log_prob = log_prob
 
         return actions, log_prob, outputs
@@ -282,17 +314,30 @@ class POMDP_PPO(Agent):
         :return: Actions
         :rtype: torch.Tensor
         """
-        actions, _, outputs = self.policy.compute({"states": self._actor_observation_preprocessor(states)}, role="policy")
+        if self._use_encoder:
+            self.encoder.set_mode("eval")
+            states = self._actor_observation_preprocessor(states)
+            raw_encoder_output, _, _ = self.encoder.compute({"states": states}, role="policy")
+            encoder_output = self._encoder_preprocessor(raw_encoder_output, train=False)
+            states = torch.cat([states, encoder_output], dim=-1)
+        else:
+            states = self._actor_observation_preprocessor(states)
+
+        # sample deterministic actions
+        actions, _, outputs = self.policy.compute({"states": states}, role="policy")
+
         return actions, None, outputs
 
     def record_transition(
         self,
         states: torch.Tensor,
         actor_observations: torch.Tensor,
+        other_observations: torch.Tensor,
         actions: torch.Tensor,
         rewards: torch.Tensor,
         next_states: torch.Tensor,
         next_actor_observations: torch.Tensor,
+        next_other_observations: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
         infos: Any,
@@ -309,6 +354,10 @@ class POMDP_PPO(Agent):
         :type rewards: torch.Tensor
         :param next_states: Next observations/states of the environment
         :type next_states: torch.Tensor
+        :param next_actor_observations: Next actor observations of the environment
+        :type next_actor_observations: torch.Tensor
+        :param next_other_observations: Next other observations of the environment
+        :type next_other_observations: torch.Tensor
         :param terminated: Signals to indicate that episodes have terminated
         :type terminated: torch.Tensor
         :param truncated: Signals to indicate that episodes have been truncated
@@ -342,31 +391,23 @@ class POMDP_PPO(Agent):
                 rewards += self._discount_factor * values * truncated
 
             # storage transition in memory
-            self.memory.add_samples(
-                states=states,
-                actor_observations=actor_observations,
-                actions=actions,
-                rewards=rewards,
-                next_states=next_states,
-                next_actor_observations=next_actor_observations,
-                terminated=terminated,
-                truncated=truncated,
-                log_prob=self._current_log_prob,
-                values=values,
-            )
+            memory_samples = {
+                "states": states,
+                "actor_observations": actor_observations,
+                "actions": actions,
+                "rewards": rewards,
+                "next_states": next_states,
+                "next_actor_observations": next_actor_observations,
+                "terminated": terminated,
+                "truncated": truncated,
+                "log_prob": self._current_log_prob,
+                "values": values,
+            }
+            if self._use_encoder:
+                memory_samples[f"{self._encoder_kwargs['obs_name']}"] = other_observations[f"{self._encoder_kwargs['obs_name']}"]
+            self.memory.add_samples(**memory_samples)
             for memory in self.secondary_memories:
-                memory.add_samples(
-                    states=states,
-                    actor_observations=actor_observations,
-                    actions=actions,
-                    rewards=rewards,
-                    next_states=next_states,
-                    next_actor_observations=next_actor_observations,
-                    terminated=terminated,
-                    truncated=truncated,
-                    log_prob=self._current_log_prob,
-                    values=values,
-                )
+                memory.add_samples(**memory_samples)
             for name, item in infos["log"].items():
                 if "Metrics" in name or "Episode_Termination" in name:
                     self.track_data(name, item)
@@ -489,21 +530,18 @@ class POMDP_PPO(Agent):
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
         cumulative_grad_penalty = 0
+        cumulative_encoder_loss = 0
 
         # learning epochs
         for epoch in range(self._learning_epochs):
             kl_divergences = []
 
             # mini-batches loop
-            for (
-                sampled_states,
-                sampled_actor_observations,
-                sampled_actions,
-                sampled_log_prob,
-                sampled_values,
-                sampled_returns,
-                sampled_advantages,
-            ) in sampled_batches:
+            for batch in sampled_batches:
+                if self._use_encoder:
+                    sampled_states, sampled_actor_observations, sampled_actions, sampled_log_prob, sampled_values, sampled_returns, sampled_advantages, sampled_vel_est = batch
+                else:
+                    sampled_states, sampled_actor_observations, sampled_actions, sampled_log_prob, sampled_values, sampled_returns, sampled_advantages = batch
 
                 with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
 
@@ -513,6 +551,12 @@ class POMDP_PPO(Agent):
                     # Enable gradient computation for gradient penalty
                     if self._grad_penalty_weight > 0:
                         sampled_actor_observations.requires_grad_(True)
+
+                    if self._use_encoder:
+                        self.encoder.set_mode("train")
+                        raw_encoder_output, _, _ = self.encoder.compute({"states": sampled_actor_observations}, role="policy")
+                        encoder_output = self._encoder_preprocessor(raw_encoder_output, train=not epoch)
+                        sampled_actor_observations = torch.cat([sampled_actor_observations, encoder_output.detach()], dim=-1)
 
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_actor_observations, "taken_actions": sampled_actions}, role="policy"
@@ -559,6 +603,8 @@ class POMDP_PPO(Agent):
                         )
                     value_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values)
 
+                    encoder_loss = self._update_encoder(raw_encoder_output, sampled_vel_est)
+
                 # optimization step
                 self.optimizer.zero_grad()
                 self.scaler.scale(policy_loss + entropy_loss + value_loss + gradient_penalty_loss).backward()
@@ -587,6 +633,8 @@ class POMDP_PPO(Agent):
                     cumulative_grad_penalty += gradient_penalty_loss.item()
                 if self._entropy_loss_scale:
                     cumulative_entropy_loss += entropy_loss.item()
+                if self._use_encoder:
+                    cumulative_encoder_loss += encoder_loss.item()
 
             # update learning rate
             if self._learning_rate_scheduler:
@@ -621,3 +669,27 @@ class POMDP_PPO(Agent):
             self.track_data("Loss/learning_rate", self.learning_rate_scheduler.get_last_lr()[0])
         if self.policy._noise_generator and type(self.policy.noise_generator).__name__ == "PinkNoiseDist":
             self.track_data("Loss/noise_smoothing", self.policy.noise_generator.smoothing)
+        if self._use_encoder:
+            self.track_data(f"Loss/{self._encoder_kwargs['model_name']}_loss", cumulative_encoder_loss / (self._learning_epochs * self._mini_batches))
+
+    def _update_encoder(self, estimates, targets, loss="mse") -> float:
+        # compute encoder loss
+        encoder_loss = 0
+        
+        # Compute loss
+        if loss == "mse":
+            encoder_loss = F.mse_loss(estimates, targets)
+        else:
+            raise ValueError(f"Loss {loss} not supported")  
+        
+        # Update encoder separately
+        self.encoder_optimizer.zero_grad()
+        self.scaler.scale(encoder_loss).backward()
+        
+        if self._grad_norm_clip > 0:
+            self.scaler.unscale_(self.encoder_optimizer)
+            nn.utils.clip_grad_norm_(self.encoder.parameters(), self._grad_norm_clip)
+        
+        self.scaler.step(self.encoder_optimizer)
+        self.encoder.set_mode("eval")
+        return encoder_loss

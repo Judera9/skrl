@@ -1,6 +1,8 @@
 from typing import Any, Mapping, Type, Union
 
 import copy
+import torch
+import gymnasium
 
 from skrl import logger
 from skrl.agents import Agent
@@ -89,6 +91,8 @@ class Runner:
             from skrl.models import SimpleGaussian as component
         elif name == "simpledeterministic":
             from skrl.models import SimpleDeterministic as component
+        elif name == "encoder":
+            from skrl.models import Encoder as component
         # memory
         elif name == "randommemory":
             from skrl.memories import RandomMemory as component
@@ -171,15 +175,13 @@ class Runner:
         _direct_eval = [
             "learning_rate_scheduler",
             "entropy_scheduler",
-            "shared_state_preprocessor",
-            "state_preprocessor",
-            "actor_observation_preprocessor",
-            "value_preprocessor",
-            "amp_state_preprocessor",
             "noise",
             "noise_generator",
             "smooth_regularization_noise",
         ]
+
+        import re
+        _preprocessor_pattern = re.compile(r".*preprocessor$")
 
         def reward_shaper_function(scale):
             def reward_shaper(rewards, *args, **kwargs):
@@ -192,7 +194,7 @@ class Runner:
                 if isinstance(value, dict):
                     update_dict(value)
                 else:
-                    if key in _direct_eval:
+                    if key in _direct_eval or _preprocessor_pattern.match(key):
                         if isinstance(value, str):
                             d[key] = eval(value)
                     elif key.endswith("_kwargs"):
@@ -240,6 +242,7 @@ class Runner:
             # non-shared models
             if separate:
                 for role in models_cfg:
+                    action_space = action_spaces[agent_id]
                     # get instantiator function and remove 'class' key
                     model_class = models_cfg[role].get("class")
                     if not model_class:
@@ -259,10 +262,33 @@ class Runner:
                             logger.warning(
                                 "Unable to get AMP space via 'env.amp_observation_space'. Using 'env.observation_space' instead"
                             )
+
+                    # replace with cfg `input_key` and `output_key`
+                    if 'input_key' in models_cfg[role]:
+                        input_key = models_cfg[role]['input_key']
+                        
+                        # Handle combined observation spaces (e.g., "policy + encoder")
+                        if '+' in input_key:
+                            # Split by '+' and strip whitespace
+                            space_keys = [key.strip() for key in input_key.split('+')]
+                            
+                            # Get individual spaces and combine them
+                            spaces = [env.certain_observation_space(key) for key in space_keys]
+                            
+                            # For Box spaces, concatenate the dimensions
+                            import numpy as np
+                            low = np.concatenate([space.low for space in spaces])
+                            high = np.concatenate([space.high for space in spaces])
+                            observation_space = gymnasium.spaces.Box(low=low, high=high, dtype=spaces[0].dtype)
+                        else:
+                            observation_space = env.certain_observation_space(input_key)
+                            
+                    if 'output_key' in models_cfg[role]:
+                        action_space = env.certain_observation_space(models_cfg[role]['output_key'])
                     # print model source
                     source = model_class(
                         observation_space=observation_space,
-                        action_space=action_spaces[agent_id],
+                        action_space=action_space,
                         device=device,
                         **self._process_cfg(models_cfg[role]),
                         return_source=True,
@@ -275,10 +301,12 @@ class Runner:
                     # instantiate model
                     models[agent_id][role] = model_class(
                         observation_space=observation_space,
-                        action_space=action_spaces[agent_id],
+                        action_space=action_space,
                         device=device,
                         **self._process_cfg(models_cfg[role]),
                     )
+                    torch.manual_seed(cfg['seed'])
+                    torch.cuda.manual_seed(cfg['seed'])
             # shared models
             else:
                 roles = list(models_cfg.keys())
@@ -324,6 +352,8 @@ class Runner:
                     parameters=parameters,
                 )
                 models[agent_id][roles[1]] = models[agent_id][roles[0]]
+                torch.manual_seed(cfg['seed'])
+                torch.cuda.manual_seed(cfg['seed'])
 
         # initialize lazy modules' parameters
         for agent_id in possible_agents:
@@ -452,6 +482,10 @@ class Runner:
                     "actor_observation_space": observation_spaces[agent_id],
                     "action_space": action_spaces[agent_id],
                 }
+            if agent_cfg.get("use_encoder", False):
+                agent_cfg["encoder_kwargs"]["encoder_preprocessor_kwargs"].update(
+                    {"size": env.certain_observation_space(f'{agent_cfg["encoder_kwargs"]["obs_name"]}'), "device": device}
+                )
             else:
                 agent_cfg.get("state_preprocessor_kwargs", {}).update(
                     {"size": observation_spaces[agent_id], "device": device}

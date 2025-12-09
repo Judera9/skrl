@@ -79,7 +79,10 @@ class IsaaclabTrainer(Trainer):
         assert self.env.num_agents == 1, "This method is not allowed for multi-agents"
 
         # reset env
-        states, actor_observations, infos = self.env.reset()
+        observations_dict, infos = self.env.reset()
+        actor_observations = observations_dict.pop("policy")
+        states = observations_dict.pop("critic")
+        other_observations = observations_dict
 
         for timestep in tqdm.tqdm(
             range(self.initial_timestep, self.timesteps), disable=self.disable_progressbar, file=sys.stdout
@@ -93,7 +96,10 @@ class IsaaclabTrainer(Trainer):
                 actions = self.agents.act(actor_observations, timestep=timestep, timesteps=self.timesteps)[0]
 
                 # step the environments
-                next_states, next_actor_observations, rewards, terminated, truncated, infos = self.env.step(actions)
+                next_observations_dict, rewards, terminated, truncated, infos = self.env.step(actions)
+                next_actor_observations = next_observations_dict.pop("policy")
+                next_states = next_observations_dict.pop("critic")
+                next_other_observations = next_observations_dict
 
                 # render scene
                 if not self.headless:
@@ -103,10 +109,12 @@ class IsaaclabTrainer(Trainer):
                 self.agents.record_transition(
                     states=states,
                     actor_observations=actor_observations,
+                    other_observations=other_observations,
                     actions=actions,
                     rewards=rewards,
                     next_states=next_states,
                     next_actor_observations=next_actor_observations,
+                    next_other_observations=next_other_observations,
                     terminated=terminated,
                     truncated=truncated,
                     infos=infos,
@@ -128,6 +136,7 @@ class IsaaclabTrainer(Trainer):
             if self.env.num_envs > 1:
                 states = next_states
                 actor_observations = next_actor_observations
+                other_observations = next_other_observations
                 # Reset noise generators for terminated environments
                 dones = terminated | truncated
                 if dones.any():
@@ -135,12 +144,16 @@ class IsaaclabTrainer(Trainer):
             else:
                 if terminated.any() or truncated.any():
                     with torch.no_grad():
-                        states, actor_observations, infos = self.env.reset()
+                        observations_dict, infos = self.env.reset()
+                        actor_observations = observations_dict.pop("policy")
+                        states = observations_dict.pop("critic")
+                        other_observations = observations_dict
                     # Reset noise generator for single environment
                     self.agents.policy.reset()
                 else:
                     states = next_states
                     actor_observations = next_actor_observations
+                    other_observations = next_other_observations
 
     def eval(self) -> None:
         """Evaluate the agents sequentially
@@ -159,7 +172,10 @@ class IsaaclabTrainer(Trainer):
         assert self.env.num_agents == 1, "This method is not allowed for multi-agents"
 
         # reset env
-        states, actor_observations, infos = self.env.reset()
+        observations_dict, infos = self.env.reset()
+        actor_observations = observations_dict.pop("policy")
+        states = observations_dict.pop("critic")
+        other_observations = observations_dict
 
         for timestep in tqdm.tqdm(
             range(self.initial_timestep, self.timesteps), disable=self.disable_progressbar, file=sys.stdout
@@ -174,7 +190,10 @@ class IsaaclabTrainer(Trainer):
                 actions = outputs[0] if self.stochastic_evaluation else outputs[-1].get("mean_actions", outputs[0])
 
                 # step the environments
-                next_states, next_actor_observations, rewards, terminated, truncated, infos = self.env.step(actions)
+                next_observations_dict, rewards, terminated, truncated, infos = self.env.step(actions)
+                next_actor_observations = next_observations_dict.pop("policy")
+                next_states = next_observations_dict.pop("critic")
+                next_other_observations = next_observations_dict
 
                 # render scene
                 if not self.headless:
@@ -184,10 +203,12 @@ class IsaaclabTrainer(Trainer):
                 self.agents.record_transition(
                     states=states,
                     actor_observations=actor_observations,
+                    other_observations=other_observations,
                     actions=actions,
                     rewards=rewards,
                     next_states=next_states,
                     next_actor_observations=next_actor_observations,
+                    next_other_observations=next_other_observations,
                     terminated=terminated,
                     truncated=truncated,
                     infos=infos,
@@ -209,10 +230,15 @@ class IsaaclabTrainer(Trainer):
             if self.env.num_envs > 1:
                 states = next_states
                 actor_observations = next_actor_observations
+                other_observations = next_other_observations
             else:
                 if terminated.any() or truncated.any():
                     with torch.no_grad():
-                        states, actor_observations, infos = self.env.reset()
+                        observations_dict, infos = self.env.reset()
+                        actor_observations = observations_dict.pop("policy")
+                        states = observations_dict.pop("critic")
+                        other_observations = observations_dict
                 else:
                     states = next_states
                     actor_observations = next_actor_observations
+                    other_observations = next_other_observations
