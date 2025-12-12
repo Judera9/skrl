@@ -28,11 +28,24 @@ class SimpleGaussian(Model):
         noise_std_type: str = "scalar",
         **kwargs,
     ):
+        known_keys = [
+            "share_std_backbone",
+            "use_scale_tril",
+            "output_action_scale",
+            "max_log_std",
+            "min_log_std",
+            "max_action",
+            "min_action",
+            "noise_generator",
+            "noise_generator_kwargs",
+        ]
         if kwargs:
-            print(
-                "SimpleGaussian.__init__ got unexpected arguments, which will be checked below: "
-                + str([key for key in kwargs.keys()])
-            )
+            unknown_keys = [key for key in kwargs.keys() if key not in known_keys]
+            if unknown_keys:
+                print(
+                    "SimpleGaussian.__init__ got unexpected arguments, which will be checked below: "
+                    + str(unknown_keys)
+                )
         super().__init__(observation_space, action_space, device)
 
         self.share_std_backbone = kwargs.get("share_std_backbone", False)

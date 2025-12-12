@@ -181,6 +181,7 @@ class POMDP_PPO(Agent):
         if self._use_encoder:
             self.encoder = self.models.get(self._encoder_kwargs["model_name"], None)
             self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self._encoder_kwargs["learning_rate"])
+            self.encoder_scaler = torch.amp.GradScaler(device=self._device_type, enabled=self._mixed_precision)
             self.checkpoint_modules["encoder"] = self.encoder
             self.checkpoint_modules["encoder_optimizer"] = self.encoder_optimizer
 
@@ -332,12 +333,12 @@ class POMDP_PPO(Agent):
         self,
         states: torch.Tensor,
         actor_observations: torch.Tensor,
-        other_observations: torch.Tensor,
+        other_observations: Dict[str, torch.Tensor],
         actions: torch.Tensor,
         rewards: torch.Tensor,
         next_states: torch.Tensor,
         next_actor_observations: torch.Tensor,
-        next_other_observations: torch.Tensor,
+        next_other_observations: Dict[str, torch.Tensor],
         terminated: torch.Tensor,
         truncated: torch.Tensor,
         infos: Any,
@@ -348,6 +349,10 @@ class POMDP_PPO(Agent):
 
         :param states: Observations/states of the environment used to make the decision
         :type states: torch.Tensor
+        :param actor_observations: Actor observations of the environment used to make the decision
+        :type actor_observations: torch.Tensor
+        :param other_observations: Other observations of the environment used to make the decision
+        :type other_observations: Dict[str, torch.Tensor]
         :param actions: Actions taken by the agent
         :type actions: torch.Tensor
         :param rewards: Instant rewards achieved by the current actions
@@ -357,7 +362,7 @@ class POMDP_PPO(Agent):
         :param next_actor_observations: Next actor observations of the environment
         :type next_actor_observations: torch.Tensor
         :param next_other_observations: Next other observations of the environment
-        :type next_other_observations: torch.Tensor
+        :type next_other_observations: Dict[str, torch.Tensor]
         :param terminated: Signals to indicate that episodes have terminated
         :type terminated: torch.Tensor
         :param truncated: Signals to indicate that episodes have been truncated
@@ -404,10 +409,12 @@ class POMDP_PPO(Agent):
                 "values": values,
             }
             if self._use_encoder:
-                memory_samples[f"{self._encoder_kwargs['obs_name']}"] = other_observations[f"{self._encoder_kwargs['obs_name']}"]
+                memory_samples[f"{self._encoder_kwargs['obs_name']}"] = other_observations.pop(f"{self._encoder_kwargs['obs_name']}")
             self.memory.add_samples(**memory_samples)
             for memory in self.secondary_memories:
                 memory.add_samples(**memory_samples)
+            
+            # update logs for Metrics and Episode_Termination
             for name, item in infos["log"].items():
                 if "Metrics" in name or "Episode_Termination" in name:
                     self.track_data(name, item)
@@ -603,7 +610,8 @@ class POMDP_PPO(Agent):
                         )
                     value_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values)
 
-                    encoder_loss = self._update_encoder(raw_encoder_output, sampled_vel_est)
+                    if self._use_encoder:
+                        encoder_loss = self._update_encoder(raw_encoder_output, sampled_vel_est)
 
                 # optimization step
                 self.optimizer.zero_grad()
@@ -684,12 +692,14 @@ class POMDP_PPO(Agent):
         
         # Update encoder separately
         self.encoder_optimizer.zero_grad()
-        self.scaler.scale(encoder_loss).backward()
+        self.encoder_scaler.scale(encoder_loss).backward()
         
         if self._grad_norm_clip > 0:
-            self.scaler.unscale_(self.encoder_optimizer)
+            self.encoder_scaler.unscale_(self.encoder_optimizer)
             nn.utils.clip_grad_norm_(self.encoder.parameters(), self._grad_norm_clip)
         
-        self.scaler.step(self.encoder_optimizer)
+        self.encoder_scaler.step(self.encoder_optimizer)
+        self.encoder_scaler.update()
+
         self.encoder.set_mode("eval")
         return encoder_loss

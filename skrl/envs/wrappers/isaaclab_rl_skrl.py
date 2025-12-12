@@ -27,8 +27,16 @@ Or, equivalently, by directly calling the skrl library API as follows:
 from __future__ import annotations
 
 from typing import Literal
+import collections
+import gymnasium as gym
+import importlib
+import inspect
+import os
+import re
+import yaml
 
 from isaaclab.envs import DirectMARLEnv, DirectRLEnv, ManagerBasedRLEnv
+from robot_lab.envs import CustomBasedRLEnv
 
 """
 Vectorized environment wrapper.
@@ -36,7 +44,7 @@ Vectorized environment wrapper.
 
 
 def SkrlVecEnvWrapper(
-    env: ManagerBasedRLEnv | DirectRLEnv | DirectMARLEnv,
+    env: ManagerBasedRLEnv | DirectRLEnv | DirectMARLEnv | CustomBasedRLEnv,
     ml_framework: Literal["torch"] = "torch",
     wrapper: Literal["auto", "isaaclab", "isaaclab-single-agent", "isaaclab-multi-agent"] = "isaaclab",
 ):
@@ -65,6 +73,7 @@ def SkrlVecEnvWrapper(
         not isinstance(env.unwrapped, ManagerBasedRLEnv)
         and not isinstance(env.unwrapped, DirectRLEnv)
         and not isinstance(env.unwrapped, DirectMARLEnv)
+        and not isinstance(env.unwrapped, CustomBasedRLEnv)
     ):
         raise ValueError(
             "The environment must be inherited from ManagerBasedRLEnv, DirectRLEnv or DirectMARLEnv. Environment type:"
@@ -81,17 +90,6 @@ def SkrlVecEnvWrapper(
 
     # wrap and return the environment
     return wrap_env(env, wrapper)
-
-import collections
-import gymnasium as gym
-import importlib
-import inspect
-import os
-import re
-import yaml
-
-from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
-
 
 def get_checkpoint_path(
     log_path: str, run_dir: str = ".*", checkpoint: str = ".*", other_dirs: list[str] = None, sort_alpha: bool = True, load_run: str = None

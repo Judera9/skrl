@@ -20,7 +20,7 @@ class SimpleDeterministic(Model):
         observation_space,
         action_space,
         device=None,
-        critic_hidden_dims=[256, 256, 256],
+        hidden_dims=[256, 256, 256],
         activation="elu",
         **kwargs,
     ):
@@ -31,26 +31,25 @@ class SimpleDeterministic(Model):
             )
         super().__init__(observation_space, action_space, device)
 
-        # critic
-        self.critic = MLP(self.num_observations, 1, critic_hidden_dims, activation)
-        print(f"Critic MLP: {self.critic}")
+        # network
+        self.network = MLP(self.num_observations, self.num_actions, hidden_dims, activation)
 
     def reset(self, dones=None):
         pass
 
     def compute(self, inputs, role=""):
-        """Compute the state value"""
+        """Compute the network output"""
         states = inputs.get("states")
         
         # Handle both flattened tensors and structured observations
         if isinstance(states, dict):
             states = unflatten_tensorized_space(self.observation_space, states)
         
-        # Compute state value
-        value = self.critic(states)
+        # Compute network output
+        output = self.network(states)
         
-        return value, None, {}
+        return output, None, {}
 
     def act(self, inputs, role=""):
-        """Act according to the specified behavior (returns state value for critic)"""
+        """Act according to the specified behavior (returns network output)"""
         return self.compute(inputs, role)

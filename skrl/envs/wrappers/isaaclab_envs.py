@@ -50,7 +50,10 @@ class IsaacLabWrapper(Wrapper):
     def certain_observation_space(self, group_key: str) -> gymnasium.Space:
         """Observation space for a certain group"""
         try:
-            return self._unwrapped.single_observation_space[group_key]
+            if group_key in self._unwrapped.single_observation_space.keys():
+                return self._unwrapped.single_observation_space[group_key]
+            else:
+                return gymnasium.spaces.Box(low=-float("inf"), high=float("inf"), shape=(0,))
         except KeyError:
             return self._unwrapped.observation_space[group_key]
 
