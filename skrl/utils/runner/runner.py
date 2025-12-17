@@ -7,6 +7,7 @@ import gymnasium
 from skrl import logger
 from skrl.agents import Agent
 from skrl.envs.wrappers import MultiAgentEnvWrapper, Wrapper
+from skrl.envs.wrappers import IsaacLabWrapper
 from skrl.models import Model
 from skrl.resources.noises import GaussianNoise, OrnsteinUhlenbeckNoise, PinkNoiseDist  # noqa
 from skrl.resources.preprocessors import RunningStandardScaler  # noqa
@@ -94,6 +95,8 @@ class Runner:
         elif name == "encoder":
             from skrl.models import Encoder as component
         # memory
+        elif name == "memory":
+            from skrl.memories import Memory as component
         elif name == "randommemory":
             from skrl.memories import RandomMemory as component
         # agent
@@ -245,6 +248,7 @@ class Runner:
                     action_space = action_spaces[agent_id]
                     # get instantiator function and remove 'class' key
                     model_class = models_cfg[role].get("class")
+                    _model_class = model_class
                     if not model_class:
                         raise ValueError(f"No 'class' field defined in 'models:{role}' cfg")
                     del models_cfg[role]["class"]
@@ -253,8 +257,9 @@ class Runner:
                     observation_space = observation_spaces[agent_id]
                     if agent_class == "mappo" and role == "value":
                         observation_space = state_spaces[agent_id]
-                    if 'pomdp' in agent_class and role == "value":
+                    if agent_class in ["pomdp_ppo", "mbpo_ppo"] and role == "value":
                         observation_space = state_spaces[agent_id]
+                        action_space = gymnasium.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=action_space.dtype)
                     if agent_class == "amp" and role == "discriminator":
                         try:
                             observation_space = env.amp_observation_space
@@ -482,10 +487,6 @@ class Runner:
                     "actor_observation_space": observation_spaces[agent_id],
                     "action_space": action_spaces[agent_id],
                 }
-            if agent_cfg.get("use_encoder", False):
-                agent_cfg["encoder_kwargs"]["encoder_preprocessor_kwargs"].update(
-                    {"size": env.certain_observation_space(f'{agent_cfg["encoder_kwargs"]["obs_name"]}'), "device": device}
-                )
             else:
                 agent_cfg.get("state_preprocessor_kwargs", {}).update(
                     {"size": observation_spaces[agent_id], "device": device}
@@ -496,6 +497,10 @@ class Runner:
                     "observation_space": observation_spaces[agent_id],
                     "action_space": action_spaces[agent_id],
                 }
+            if agent_cfg.get("use_encoder", False):
+                agent_cfg["encoder_kwargs"]["encoder_preprocessor_kwargs"].update(
+                    {"size": env.certain_observation_space(f'{agent_cfg["encoder_kwargs"]["obs_name"]}'), "device": device}
+                )
         # multi-agent configuration and instantiation
         elif agent_class in ["ippo"]:
             agent_cfg = self._component(f"{agent_class}_DEFAULT_CONFIG").copy()
