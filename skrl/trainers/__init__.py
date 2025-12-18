@@ -4,3 +4,4 @@ from skrl.trainers.parallel import ParallelTrainer
 from skrl.trainers.sequential import SequentialTrainer
 from skrl.trainers.step import StepTrainer
 from skrl.trainers.isaaclab_trainer import IsaaclabTrainer
+from skrl.trainers.mbpo_trainer import MBPOTrainer

@@ -10,3 +10,5 @@ from skrl.models.tabular import TabularMixin
 from skrl.models.simple_deterministic import SimpleDeterministic
 from skrl.models.simple_gaussian import SimpleGaussian
 from skrl.models.encoder import Encoder
+
+from skrl.models.rwm_world_model import SystemDynamicsEnsemble

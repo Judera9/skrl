@@ -10,7 +10,7 @@ from skrl.envs.wrappers import MultiAgentEnvWrapper, Wrapper
 from skrl.envs.wrappers import IsaacLabWrapper
 from skrl.models import Model
 from skrl.resources.noises import GaussianNoise, OrnsteinUhlenbeckNoise, PinkNoiseDist  # noqa
-from skrl.resources.preprocessors import RunningStandardScaler  # noqa
+from skrl.resources.preprocessors import RunningStandardScaler, EmpiricalNormalization  # noqa
 from skrl.resources.schedulers import KLAdaptiveLR, ConstantScheduler   # noqa
 from skrl.trainers import Trainer
 from skrl.utils import set_seed
@@ -94,11 +94,15 @@ class Runner:
             from skrl.models import SimpleDeterministic as component
         elif name == "encoder":
             from skrl.models import Encoder as component
+        elif name == "systemdynamicsensemble":
+            from skrl.models import SystemDynamicsEnsemble as component
         # memory
         elif name == "memory":
             from skrl.memories import Memory as component
         elif name == "randommemory":
             from skrl.memories import RandomMemory as component
+        elif name == "replaybuffer":
+            from skrl.memories import ReplayBuffer as component
         # agent
         elif name in ["a2c", "a2c_default_config"]:
             from skrl.agents.a2c import A2C, A2C_DEFAULT_CONFIG
@@ -132,7 +136,10 @@ class Runner:
             from skrl.agents.ppo import POMDP_PPO, POMDP_PPO_DEFAULT_CONFIG
 
             component = POMDP_PPO_DEFAULT_CONFIG if "default_config" in name else POMDP_PPO
+        elif name in ["mbpo_ppo", "mbpo_ppo_default_config"]:
+            from skrl.agents.ppo import MBPO_PPO, MBPO_PPO_DEFAULT_CONFIG
 
+            component = MBPO_PPO_DEFAULT_CONFIG if "default_config" in name else MBPO_PPO
         elif name in ["rpo", "rpo_default_config"]:
             from skrl.agents.rpo import RPO, RPO_DEFAULT_CONFIG
 
@@ -163,6 +170,8 @@ class Runner:
             from skrl.trainers import SequentialTrainer as component
         elif name == "isaaclabtrainer":
             from skrl.trainers import IsaaclabTrainer as component
+        elif name == "mbpotrainer":
+            from skrl.trainers import MBPOTrainer as component
 
         if component is None:
             raise ValueError(f"Unknown component '{name}' in runner cfg")
@@ -185,6 +194,7 @@ class Runner:
 
         import re
         _preprocessor_pattern = re.compile(r".*preprocessor$")
+        _normalizer_pattern = re.compile(r".*normalizer$")
 
         def reward_shaper_function(scale):
             def reward_shaper(rewards, *args, **kwargs):
@@ -197,7 +207,9 @@ class Runner:
                 if isinstance(value, dict):
                     update_dict(value)
                 else:
-                    if key in _direct_eval or _preprocessor_pattern.match(key):
+                    if key in _direct_eval \
+                        or _preprocessor_pattern.match(key) \
+                        or _normalizer_pattern.match(key):
                         if isinstance(value, str):
                             d[key] = eval(value)
                     elif key.endswith("_kwargs"):
@@ -290,6 +302,24 @@ class Runner:
                             
                     if 'output_key' in models_cfg[role]:
                         action_space = env.certain_observation_space(models_cfg[role]['output_key'])
+
+                    # handle extra kwargs
+                    if _model_class.lower() == "systemdynamicsensemble":
+                        models_cfg[role].update({
+                            "state_dim": env.certain_observation_space('system_state').shape[0],
+                            "action_dim": env.certain_observation_space('system_action').shape[0],
+                            "extension_dim": env.certain_observation_space('system_extension').shape[0],
+                            "contact_dim": env.certain_observation_space('system_contact').shape[0],
+                            "termination_dim": env.certain_observation_space('system_termination').shape[0],
+                            })
+                        observation_space = gymnasium.spaces.Dict(
+                            {
+                                "x_state_batch": gymnasium.spaces.Box(low=-float("inf"), high=float("inf"), shape=(models_cfg[role]['history_horizon'], models_cfg[role]['state_dim'])),
+                                "x_action_batch": gymnasium.spaces.Box(low=-float("inf"), high=float("inf"), shape=(models_cfg[role]['history_horizon'], models_cfg[role]['action_dim']))
+                            }
+                        )
+                        action_space = gymnasium.spaces.Box(low=-float("inf"), high=float("inf"), shape=(models_cfg[role]['action_dim'],))
+
                     # print model source
                     source = model_class(
                         observation_space=observation_space,
@@ -398,14 +428,14 @@ class Runner:
             logger.warning(
                 "Deprecation warning: No 'memory' field defined in cfg. Using the default generated configuration"
             )
-            cfg["memory"] = {"class": "RandomMemory", "memory_size": -1}
+            cfg["memory"] = {"class": "Memory", "memory_size": -1}
         # get memory class and remove 'class' field
         try:
             memory_class = self._component(cfg["memory"]["class"])
             del cfg["memory"]["class"]
         except KeyError:
-            memory_class = self._component("RandomMemory")
-            logger.warning("No 'class' field defined in 'memory' cfg. 'RandomMemory' will be used as default")
+            memory_class = self._component("Memory")
+            logger.warning("No 'class' field defined in 'memory' cfg. 'Memory' will be used as default")
         memories = {}
         # instantiate memory
         if cfg["memory"]["memory_size"] < 0:
@@ -458,7 +488,7 @@ class Runner:
                 "reply_buffer": reply_buffer,
                 "collect_reference_motions": lambda num_samples: env.collect_reference_motions(num_samples),
             }
-        elif agent_class in ["a2c", "cem", "ddpg", "ddqn", "dqn", "ppo", "pomdp_ppo", "rpo", "sac", "td3", "trpo"]:
+        elif agent_class in ["a2c", "cem", "ddpg", "ddqn", "dqn", "ppo", "pomdp_ppo", "mbpo_ppo", "rpo", "sac", "td3", "trpo"]:
             agent_id = possible_agents[0]
             agent_cfg = self._component(f"{agent_class}_DEFAULT_CONFIG").copy()
             agent_cfg.update(self._process_cfg(cfg["agent"]))
@@ -501,6 +531,54 @@ class Runner:
                 agent_cfg["encoder_kwargs"]["encoder_preprocessor_kwargs"].update(
                     {"size": env.certain_observation_space(f'{agent_cfg["encoder_kwargs"]["obs_name"]}'), "device": device}
                 )
+            if agent_class in ["mbpo_ppo"]:
+                state_dim = env.certain_observation_space('system_state').shape[0]
+                action_dim = env.certain_observation_space('system_action').shape[0]
+                extension_dim = env.certain_observation_space('system_extension').shape[0]
+                contact_dim = env.certain_observation_space('system_contact').shape[0]
+                termination_dim = env.certain_observation_space('system_termination').shape[0]
+
+                system_dynamics_reply_buffer = None
+                if cfg.get("system_dynamics_reply_buffer"):
+                    _reply_buffer_class = cfg["system_dynamics_reply_buffer"].get("class")
+                    if not _reply_buffer_class:
+                        raise ValueError(f"No 'class' field defined in 'system_dynamics_reply_buffer' cfg")
+                    del cfg["system_dynamics_reply_buffer"]["class"]
+                    system_dynamics_reply_buffer = self._component(_reply_buffer_class)(
+                        dim=[state_dim, action_dim, extension_dim, contact_dim, termination_dim],
+                        buffer_size=cfg["system_dynamics_reply_buffer"]["memory_size"],
+                        device=device,
+                    )
+                imagination_storage = None
+                if cfg.get("imagination_storage") and agent_cfg["world_model_kwargs"].get("use_imagination", False):
+                    _storage_class = cfg["imagination_storage"].get("class")
+                    if not _storage_class:
+                        raise ValueError(f"No 'class' field defined in 'imagination_storage' cfg")
+                    del cfg["imagination_storage"]["class"]
+                    imagination_storage = self._component(_storage_class)(
+                        num_envs=agent_cfg.get("num_imagination_envs", 0),
+                        device=device,
+                        **self._process_cfg(cfg.get("imagination_storage", {}))
+                    )
+                if agent_cfg.get("world_model", None):
+                    agent_cfg["world_model_kwargs"]["device"] = device
+                    if agent_cfg["world_model"] == "SystemDynamicsEnsemble":
+                        if agent_cfg["world_model_kwargs"].get("rwm_state_normalizer", None):
+                            agent_cfg["world_model_kwargs"]["rwm_state_normalizer_kwargs"].update({
+                                "shape": state_dim,
+                                "until": 1.0e8,
+                                "eps": 1.0e-8,
+                            })
+                        if agent_cfg["world_model_kwargs"].get("rwm_action_normalizer", None):
+                            agent_cfg["world_model_kwargs"]["rwm_action_normalizer_kwargs"].update({
+                                "shape": action_dim,
+                                "until": 1.0e8,
+                                "eps": 1.0e-8,
+                            })
+                agent_kwargs.update({
+                    "system_dynamics_reply_buffer": system_dynamics_reply_buffer,
+                    "imagination_storage": imagination_storage,
+                })
         # multi-agent configuration and instantiation
         elif agent_class in ["ippo"]:
             agent_cfg = self._component(f"{agent_class}_DEFAULT_CONFIG").copy()

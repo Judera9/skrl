@@ -354,6 +354,20 @@ class Memory:
             return [[self.tensors_view[name][batch[0] : batch[1]] for name in names] for batch in batches]
         return [[self.tensors_view[name] for name in names]]
 
+    def mini_batch_generator(self, names: Tuple[str], mini_batches: int, sequence_length: int) -> List[torch.Tensor]:
+        """Use yield to generate mini-batches from memory for training.
+
+        :param names: Tensors names from which to obtain the samples
+        :type names: tuple or list of strings
+        :param sequence_length: Length of each sequence (default: ``1``)
+        :type sequence_length: int, optional
+        :param mini_batches: Number of mini-batches to sample (default: ``1``)
+        :type mini_batches: int, optional
+        :param num_envs: Number of environments (default: ``1``)
+        :type num_envs: int, optional
+        """
+        raise NotImplementedError("The mini-batch generator (.mini_batch_generator()) is not implemented")
+
     def get_sampling_indexes(self) -> Union[tuple, np.ndarray, torch.Tensor]:
         """Get the last indexes used for sampling
 

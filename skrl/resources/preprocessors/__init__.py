@@ -1,1 +1,2 @@
 from skrl.resources.preprocessors.running_standard_scaler import RunningStandardScaler
+from skrl.resources.preprocessors.normalization import EmpiricalNormalization, EmpiricalDiscountedVariationNormalization
