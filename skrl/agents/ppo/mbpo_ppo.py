@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from tensordict import TensorDict
 import warnings
 import gymnasium
 
@@ -800,7 +799,7 @@ class MBPO_PPO(POMDP_PPO):
             - Real data provides accurate environment feedback for policy learning
             - Imagination data expands the training dataset and improves sample efficiency
             - Both storages must have compatible tensor structures and feature dimensions
-            - The function handles both torch.Tensor and TensorDict data formats
+            - The function handles both torch.Tensor and Dict[str, torch.Tensor] data formats
         """
         real_sampled_batches = real_storage.sample_all(names=self._tensors_names, mini_batches=self._mini_batches)
         imagination_sampled_batches = imagination_storage.sample_all(names=self._imagination_tensors_names, mini_batches=self._mini_batches)
@@ -811,15 +810,11 @@ class MBPO_PPO(POMDP_PPO):
             for real_batch_term, imagination_batch_term in zip(real_batch, imagination_batch):
                 if isinstance(real_batch_term, torch.Tensor) and isinstance(imagination_batch_term, torch.Tensor):
                     combined_term = torch.cat([real_batch_term, imagination_batch_term], dim=0)
-                elif isinstance(real_batch_term, TensorDict) and isinstance(imagination_batch_term, TensorDict):
-                    combined_term = TensorDict(
-                        {
-                            key: torch.cat([real_batch_term[key], imagination_batch_term[key]], dim=0)
-                            for key in real_batch_term.keys()
-                        },
-                        batch_size=[real_batch_term.batch_size[0] + imagination_batch_term.batch_size[0]],
-                        device=real_batch_term.device,
-                    )
+                elif isinstance(real_batch_term, dict) and isinstance(imagination_batch_term, dict):
+                    combined_term = {
+                        key: torch.cat([real_batch_term[key], imagination_batch_term[key]], dim=0)
+                        for key in real_batch_term.keys()
+                    }
                 else:
                     combined_term = real_batch_term
                 combined_batch.append(combined_term)
