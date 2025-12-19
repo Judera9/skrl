@@ -382,13 +382,22 @@ class MBPO_PPO(POMDP_PPO):
         sd_contact = observation_dict.get("system_contact")
         sd_termination = observation_dict.get("system_termination")
         sd_extension = observation_dict.get("system_extension")
-        sd_state_norm = self._rwm_state_normalizer(sd_state)
-        sd_action_norm = self._rwm_action_normalizer(sd_action)
 
+        # Update normalizer statistics
+        if self.train_world_model and self._rwm_state_normalizer is not None:
+            self._rwm_state_normalizer.train()
+            self._rwm_state_normalizer.update(sd_state)
+            self._rwm_state_normalizer.eval()
+        if self.train_world_model and self._rwm_action_normalizer is not None:
+            self._rwm_action_normalizer.train()
+            self._rwm_action_normalizer.update(sd_action)
+            self._rwm_action_normalizer.eval()
+
+        # Store raw data (un-normalized) in replay buffer
         self.system_dynamics_reply_buffer.insert(
             [
-                sd_state_norm.unsqueeze(1),
-                sd_action_norm.unsqueeze(1),
+                sd_state.unsqueeze(1),
+                sd_action.unsqueeze(1),
                 sd_extension.unsqueeze(1) if sd_extension is not None else None,
                 sd_contact.unsqueeze(1) if sd_contact is not None else None,
                 sd_termination.unsqueeze(1) if sd_termination is not None else None,
@@ -658,10 +667,14 @@ class MBPO_PPO(POMDP_PPO):
         )
         
         for system_state_batch, system_action_batch, system_extension_batch, system_contact_batch, system_termination_batch in sd_generator:
+            # Normalize the data using current normalizer statistics
+            system_state_batch_norm = self._rwm_state_normalizer(system_state_batch)
+            system_action_batch_norm = self._rwm_action_normalizer(system_action_batch)
+            
             self.world_model.reset()
             state_loss, sequence_loss, bound_loss, kl_loss, extension_loss, contact_loss, termination_loss = self.world_model.compute_loss(
-                system_state_batch,
-                system_action_batch,
+                system_state_batch_norm,
+                system_action_batch_norm,
                 system_extension_batch,
                 system_contact_batch,
                 system_termination_batch,
@@ -722,14 +735,33 @@ class MBPO_PPO(POMDP_PPO):
             self.eval_trajectories_num,
         )
         state_traj, action_traj, extension_traj, contact_traj, termination_traj = next(sd_generator)
-        state_traj_pred, _, _, action_traj_pred, extension_traj_pred, contact_traj_pred, termination_traj_pred = self.system_dynamics_autoregressive_prediction(state_traj, action_traj, extension_traj, contact_traj, termination_traj)
+        
+        # Normalize the data for evaluation
+        state_traj_norm = self._rwm_state_normalizer(state_traj)
+        action_traj_norm = self._rwm_action_normalizer(action_traj)
+        
+        state_traj_pred, _, _, action_traj_pred, extension_traj_pred, contact_traj_pred, termination_traj_pred = self.system_dynamics_autoregressive_prediction(state_traj_norm, action_traj_norm, extension_traj, contact_traj, termination_traj)
+        
+        # Denormalize predictions for error calculation
+        state_traj_pred = self._rwm_state_normalizer.inverse(state_traj_pred)
+        action_traj_pred = self._rwm_action_normalizer.inverse(action_traj_pred)
+        
         # TODO: Warning!!! should divide by epsilon to prevent inf
         traj_autoregressive_error = ((state_traj_pred[:, self.world_model.history_horizon:] - state_traj[:, self.world_model.history_horizon:]).abs().sum(dim=-1) / state_traj[:, self.world_model.history_horizon:].abs().sum(dim=-1)).mean().item()
         traj_autoregressive_error_noised_dict = {}
         for noise_scale in self.eval_trajectory_noise_scale:
             state_traj_noised = state_traj + torch.randn_like(state_traj) * noise_scale
             action_traj_noised = action_traj + torch.randn_like(action_traj) * noise_scale
-            state_traj_pred_noised, _, _, _, _, _, _ = self.system_dynamics_autoregressive_prediction(state_traj_noised, action_traj_noised, extension_traj, contact_traj, termination_traj)
+            
+            # Normalize noisy data
+            state_traj_noised_norm = self._rwm_state_normalizer(state_traj_noised)
+            action_traj_noised_norm = self._rwm_action_normalizer(action_traj_noised)
+            
+            state_traj_pred_noised, _, _, _, _, _, _ = self.system_dynamics_autoregressive_prediction(state_traj_noised_norm, action_traj_noised_norm, extension_traj, contact_traj, termination_traj)
+            
+            # Denormalize predictions
+            state_traj_pred_noised = self._rwm_state_normalizer.inverse(state_traj_pred_noised)
+            
             traj_autoregressive_error_noised = ((state_traj_pred_noised[:, self.world_model.history_horizon:] - state_traj_noised[:, self.world_model.history_horizon:]).abs().sum(dim=-1) / state_traj_noised[:, self.world_model.history_horizon:].abs().sum(dim=-1)).mean().item()
             traj_autoregressive_error_noised_dict[noise_scale] = traj_autoregressive_error_noised
 
