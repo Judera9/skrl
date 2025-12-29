@@ -28,9 +28,11 @@ class ConstantScheduler:
         # Apply decay at specified intervals
         if self.step_count % self.decay_interval == 0:
             self.current_value *= self.decay_factor
-            
-        return max(self.current_value, self.min_value)
-    
+            # Ensure current_value never goes below min_value
+            self.current_value = max(self.current_value, self.min_value)
+                
+        return self.current_value
+
     def get_value(self) -> float:
         """Get current entropy value without stepping
         

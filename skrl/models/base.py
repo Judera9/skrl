@@ -308,7 +308,7 @@ class Model(torch.nn.Module):
                  or None for deterministic models. The third component is a dictionary containing extra output values
         :rtype: tuple of torch.Tensor, torch.Tensor or None, and dict
         """
-        return self.act(inputs, role)
+        return self.act(inputs, role=role)
 
     def compute(
         self, inputs: Mapping[str, Union[torch.Tensor, Any]], role: str = ""

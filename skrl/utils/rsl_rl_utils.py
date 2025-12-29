@@ -11,8 +11,7 @@ import os
 import pathlib
 import torch
 import warnings
-from tensordict import TensorDict
-from typing import Callable
+from typing import Callable, Dict, Union
 
 
 def resolve_nn_activation(act_name: str) -> torch.nn.Module:
@@ -76,8 +75,8 @@ def resolve_optimizer(optimizer_name: str) -> torch.optim.Optimizer:
 
 
 def split_and_pad_trajectories(
-    tensor: torch.Tensor | TensorDict, dones: torch.Tensor
-) -> tuple[torch.Tensor | TensorDict, torch.Tensor]:
+    tensor: torch.Tensor | Dict[str, torch.Tensor], dones: torch.Tensor
+) -> tuple[torch.Tensor | Dict[str, torch.Tensor], torch.Tensor]:
     """Splits trajectories at done indices. Then concatenates them and pads with zeros up to the length of the longest
     trajectory. Returns masks corresponding to valid parts of the trajectories.
 
@@ -103,7 +102,7 @@ def split_and_pad_trajectories(
     trajectory_lengths = done_indices[1:] - done_indices[:-1]
     trajectory_lengths_list = trajectory_lengths.tolist()
     # Extract the individual trajectories
-    if isinstance(tensor, TensorDict):
+    if isinstance(tensor, dict):
         padded_trajectories = {}
         for k, v in tensor.items():
             # split the tensor into trajectories
@@ -114,9 +113,7 @@ def split_and_pad_trajectories(
             padded_trajectories[k] = torch.nn.utils.rnn.pad_sequence(trajectories)
             # remove the added tensor
             padded_trajectories[k] = padded_trajectories[k][:, :-1]
-        padded_trajectories = TensorDict(
-            padded_trajectories, batch_size=[tensor.batch_size[0], len(trajectory_lengths_list)]
-        )
+        # Note: batch_size information is lost when using dict
     else:
         # split the tensor into trajectories
         trajectories = torch.split(tensor.transpose(1, 0).flatten(0, 1), trajectory_lengths_list)
@@ -200,7 +197,7 @@ def string_to_callable(name: str) -> Callable:
 
 
 def resolve_obs_groups(
-    obs: TensorDict, obs_groups: dict[str, list[str]], default_sets: list[str]
+    obs: Dict[str, torch.Tensor], obs_groups: dict[str, list[str]], default_sets: list[str]
 ) -> dict[str, list[str]]:
     """Validates the observation configuration and defaults missing observation sets.
 

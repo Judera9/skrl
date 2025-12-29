@@ -31,7 +31,6 @@ class SimpleGaussian(Model):
         known_keys = [
             "share_std_backbone",
             "use_scale_tril",
-            "output_action_scale",
             "max_log_std",
             "min_log_std",
             "max_action",
@@ -50,7 +49,6 @@ class SimpleGaussian(Model):
 
         self.share_std_backbone = kwargs.get("share_std_backbone", False)
         self.use_scale_tril = kwargs.get("use_scale_tril", False)
-        self.output_action_scale = kwargs.get("output_action_scale", False)
         self.max_log_std = kwargs.get("max_log_std", 2.0)
         self.min_log_std = kwargs.get("min_log_std", -20.0)
         self.max_action = kwargs.get("max_action", 100.0)
@@ -79,17 +77,6 @@ class SimpleGaussian(Model):
                     self.actor[-1].bias[self.num_actions:].zero_()
         else:
             self.actor = MLP(num_actor_obs, self.num_actions, actor_hidden_dims, activation)
-
-            # Initialize with identity scaling for action scale
-            if self.output_action_scale:
-                self.actor = MLP(num_actor_obs, self.num_actions, actor_hidden_dims, activation, last_activation="tanh")
-                self.action_scale_net = MLP(num_actor_obs, self.num_actions, actor_hidden_dims, activation)
-                with torch.no_grad():
-                    self.action_scale_net[-1].weight[:] *= 10.0
-                    if hasattr(self.action_scale_net[-1], 'bias') and self.action_scale_net[-1].bias is not None:
-                        self.action_scale_net[-1].bias.fill_(1.0)
-            else:
-                self.actor = MLP(num_actor_obs, self.num_actions, actor_hidden_dims, activation)
 
             # Action noise parameters
             self.noise_std_type = noise_std_type
@@ -154,6 +141,8 @@ class SimpleGaussian(Model):
             # Use MultiHeadMLP with head-based access
             outputs = self.actor(states)
             mean = outputs[:, :self.num_actions]
+            # clamp actions
+            mean = torch.clamp(mean, min=self.min_action, max=self.max_action)
 
             # Extract log_std from the second half
             log_std = outputs[:, self.num_actions:]
@@ -162,6 +151,8 @@ class SimpleGaussian(Model):
         else:
             # Traditional mode: separate mean and std
             mean = self.actor(states)
+            # clamp actions
+            mean = torch.clamp(mean, min=self.min_action, max=self.max_action)
             
             if self.use_scale_tril:                
                 # Construct lower triangular matrix for extra_info
@@ -236,11 +227,6 @@ class SimpleGaussian(Model):
                 # actions = self.distribution.sample()
                 actions = mean + std * torch.randn_like(std)  # fallback or during update
 
-        # Apply action scaling if enabled
-        if self.output_action_scale:
-            action_scales = self.action_scale_net(inputs["states"])
-            actions = actions * action_scales
-        
         # Use taken_actions if provided (for PPO training), otherwise use sampled actions
         actions_for_log_prob = inputs.get("taken_actions", actions)
         
@@ -257,12 +243,6 @@ class SimpleGaussian(Model):
     def act_inference(self, inputs, role=""):
         """Deterministic action for inference (returns tuple for SKRL compatibility)"""
         mean, _, _ = self.compute(inputs, role)
-
-        # Apply action scaling if enabled
-        if self.output_action_scale:
-            action_scales = self.action_scale_net(inputs["states"])
-            mean = mean * action_scales
-
         return mean, None, {}
 
     def get_actions_log_prob(self, actions, inputs):
@@ -291,3 +271,33 @@ class SimpleGaussian(Model):
             return self.distribution.entropy().unsqueeze(-1)
         else:
             return self.distribution.entropy().sum(dim=-1)
+    
+    def set_std_scale(self, scale: float):
+        """Set the std scale for annealing. Only works when policy is fixed (no gradients).
+        
+        Args:
+            scale: Scale factor for std (0.0 to 1.0)
+        """
+        assert self.training == False, "set_std_scale only works when policy is fixed (no gradients)"
+
+        # Store original std for annealing if not already stored
+        if not hasattr(self, '_original_std') and not hasattr(self, '_original_log_std'):
+            if hasattr(self, 'std'):
+                self._original_std = self.std.data.clone()
+            elif hasattr(self, 'log_std'):
+                self._original_log_std = self.log_std.data.clone()
+
+        if self.noise_std_type == "scalar":
+            if hasattr(self, 'std'):
+                # Directly scale the std parameters
+                self.std.data = self._original_std * scale
+            elif hasattr(self, 'log_std'):
+                # Scale in log space
+                self.log_std.data = self._original_log_std + torch.log(torch.tensor(scale))
+        elif self.noise_std_type == "log":
+            if hasattr(self, 'std'):
+                # For scale_tril mode with scalar std
+                self.std.data = self._original_std * scale
+            elif hasattr(self, 'log_std'):
+                # For scale_tril mode with log std
+                self.log_std.data = self._original_log_std + torch.log(torch.tensor(scale))
